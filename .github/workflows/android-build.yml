@@ -1,0 +1,60 @@
+name: Build and Sign Android APK
+
+on:
+  push:
+    tags:
+      - "Version*"
+
+jobs:
+  build-android:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Install MAUI workload
+        run: dotnet workload install maui
+
+      - name: Verify MAUI workload Installation
+        run: dotnet workload list
+
+      - name: Restore NuGet packages
+        run: dotnet restore Demo.csproj
+
+      - name: Decode and store keystore file
+        run: |
+          $keystoreBytes = [System.Convert]::FromBase64String("${{ secrets.ANDROID_KEYSTORE_BASE64 }}")
+          Set-Content -Path "qimono-key.keystore" -Value $keystoreBytes -AsByteStream
+          keytool -list -v -keystore qimono-key.keystore -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" -alias "${{ secrets.ANDROID_KEYSTORE_ALIAS }}"
+        working-directory: ${{ github.workspace }}
+
+      - name: Build Android Release
+        run: |
+          dotnet publish Demo.csproj -c Release -f net9.0-android `
+            /p:AndroidKeyStore=true `
+            /p:AndroidSigningKeyStore="$env:GITHUB_WORKSPACE\qimono-key.keystore" `
+            /p:AndroidSigningKeyAlias="${{ secrets.ANDROID_KEYSTORE_ALIAS }}" `
+            /p:AndroidSigningKeyPass="${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" `
+            /p:AndroidSigningStorePass="${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" `
+            /p:AndroidApkSignerAdditionalArgs="--verbose" `
+            /p:EnableTrimmer=false
+
+      - name: Verify APK Exists
+        run: |
+          $apkFiles = Get-ChildItem -Path "bin\Release\net9.0-android" -Recurse -Filter *.apk
+          if ($apkFiles.Count -eq 0) {
+            throw "APK not found!"
+          }
+          Write-Host "Found APK: $($apkFiles.FullName)"
+
+      - name: Upload Signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Signed-Android-APK
+          path: bin/Release/net9.0-android/**/*.apk 
